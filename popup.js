@@ -1,7 +1,7 @@
-// Data Entry Pro v1.5.1 - Popup Controller with Auto-Sanitized Audit Vault & Multi-Modal Exporter
+// Data Entry Pro v1.5.2 - Popup Controller with Auto-Sanitized Audit Vault & Multi-Modal Exporter
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const CURRENT_VERSION = 'v1.5.1';
+  const CURRENT_VERSION = 'v1.5.2';
   const GITHUB_REPO = '0001marketingguru/data-entry-pro';
 
   // DOM Elements

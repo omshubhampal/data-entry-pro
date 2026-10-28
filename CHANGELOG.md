@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.2] - 2026-10-28
+
+### Fixed
+- **🛡️ Extension Context Invalidation Resilience**: Implemented `isExtensionAlive()` liveness guard and `safeStorageGet` / `safeStorageSet` wrapper functions around all Chrome Storage and Runtime APIs. Completely prevents unhandled `Uncaught Error: Extension context invalidated` exceptions when the extension is updated or reloaded in the background.
+- **🛑 MutationObserver Auto-Destructor**: Automatically cleans up and disconnects the DOM `MutationObserver` and debounce timers when context invalidation is detected, eliminating infinite error cascades in the console. Displays a gentle `"Reload F5"` prompt on the HUD ticker.
+
+---
+
 ## [1.5.1] - 2026-08-21
 
 ### Fixed

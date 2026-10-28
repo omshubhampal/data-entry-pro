@@ -1,7 +1,9 @@
 /**
- * Data Entry Pro v1.5.1 - Enterprise Claims UI Automation & Audit Command Center
+ * Data Entry Pro v1.5.2 - Enterprise Claims UI Automation & Audit Command Center
  * 
  * Features:
+ * - 🛡️ Context Liveness Guard & Safe Storage APIs: Permanently protects against "Extension context invalidated" errors when extension updates.
+ * - 🛑 MutationObserver Auto-Destructor: Automatically disconnects DOM observers when context is invalidated.
  * - 🔒 Runtime Portal Guard: Automatically sleeps on non-claim sites (e.g. fast.com, google.com) with 0 memory footprint.
  * - ⚡ Infallible "Query ➔ Approve" Row Engine:
  *   - Clean blur & precision listbox targeting
@@ -36,6 +38,42 @@
   if (!isClaimsPortal()) {
     console.debug('[Data Entry Pro] Inactive on non-claims portal.');
     return;
+  }
+
+  // =========================================================================
+  // --- Section 0.1: Context Liveness Guard & Safe Chrome Storage Helpers ---
+  // =========================================================================
+
+  function isExtensionAlive() {
+    try {
+      return Boolean(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function safeStorageGet(keys, callback) {
+    if (!isExtensionAlive()) return;
+    try {
+      chrome.storage?.local?.get(keys, (res) => {
+        if (chrome.runtime?.lastError) return;
+        if (typeof callback === 'function') callback(res);
+      });
+    } catch (err) {
+      console.debug('[Data Entry Pro] Storage read suppressed (context invalidated):', err.message);
+    }
+  }
+
+  function safeStorageSet(items, callback) {
+    if (!isExtensionAlive()) return;
+    try {
+      chrome.storage?.local?.set(items, () => {
+        if (chrome.runtime?.lastError) return;
+        if (typeof callback === 'function') callback();
+      });
+    } catch (err) {
+      console.debug('[Data Entry Pro] Storage write suppressed (context invalidated):', err.message);
+    }
   }
 
   // Global Diagnostic History & Session Timers
@@ -342,7 +380,7 @@
       status
     };
 
-    chrome.storage?.local?.get(['data_entry_pro_audit_vault'], (res) => {
+    safeStorageGet(['data_entry_pro_audit_vault'], (res) => {
       const vault = res?.data_entry_pro_audit_vault || {};
       if (!vault[dateKey]) vault[dateKey] = [];
 
@@ -353,7 +391,7 @@
         vault[dateKey].unshift(record);
       }
 
-      chrome.storage?.local?.set({ data_entry_pro_audit_vault: vault }, () => {
+      safeStorageSet({ data_entry_pro_audit_vault: vault }, () => {
         if (window.__DATA_ENTRY_PRO_UPDATE_HUD__) window.__DATA_ENTRY_PRO_UPDATE_HUD__();
       });
     });
@@ -887,7 +925,7 @@
     window.__DATA_ENTRY_PRO_LOGS__.unshift(diagnosticReport);
     if (window.__DATA_ENTRY_PRO_LOGS__.length > 10) window.__DATA_ENTRY_PRO_LOGS__.pop();
 
-    chrome.storage?.local?.set({ lastDiagnosticReport: diagnosticReport });
+    safeStorageSet({ lastDiagnosticReport: diagnosticReport });
 
     if (window.__DATA_ENTRY_PRO_UPDATE_HUD__) {
       window.__DATA_ENTRY_PRO_UPDATE_HUD__();
@@ -1207,15 +1245,35 @@
     // Hide HUD button
     document.getElementById('depHudCloseBtn')?.addEventListener('click', () => {
       hud.style.display = 'none';
-      chrome.storage?.local?.set({ hudVisible: false });
+      safeStorageSet({ hudVisible: false });
     });
 
     // Live Sync & Reactive Observer
     let lastClaimed = '';
     let lastApproved = '';
     let lastCaseId = '';
+    let debounceTimer = null;
+    let observer = null;
+
+    function cleanupObserver() {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+      if (observer) {
+        try {
+          observer.disconnect();
+        } catch (e) {}
+        observer = null;
+      }
+    }
 
     function updateHUDData() {
+      if (!isExtensionAlive()) {
+        cleanupObserver();
+        return;
+      }
+
       const caseId = extractCaseId();
       const claimed = extractClaimedAmount();
       const approved = extractClaimAmountApproved();
@@ -1248,7 +1306,7 @@
       });
 
       const dateKey = new Date().toISOString().slice(0, 10);
-      chrome.storage?.local?.get(['data_entry_pro_audit_vault'], (res) => {
+      safeStorageGet(['data_entry_pro_audit_vault'], (res) => {
         const vault = res?.data_entry_pro_audit_vault || {};
         const todayRows = vault[dateKey] || [];
         if (todayCountEl) {
@@ -1270,21 +1328,37 @@
       }
     }
 
-    window.__DATA_ENTRY_PRO_UPDATE_HUD__ = updateHUDData;
+    function safeUpdateHUDData() {
+      if (!isExtensionAlive()) {
+        cleanupObserver();
+        const todayCountEl = document.getElementById('depTodayCount');
+        if (todayCountEl) {
+          todayCountEl.innerText = 'Reload F5';
+          todayCountEl.title = 'Extension reloaded in background. Please refresh tab (F5).';
+        }
+        return;
+      }
+      updateHUDData();
+    }
 
-    updateHUDData();
+    window.__DATA_ENTRY_PRO_UPDATE_HUD__ = safeUpdateHUDData;
 
-    let debounceTimer = null;
-    const observer = new MutationObserver(() => {
+    safeUpdateHUDData();
+
+    observer = new MutationObserver(() => {
+      if (!isExtensionAlive()) {
+        cleanupObserver();
+        return;
+      }
       clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(updateHUDData, 300);
+      debounceTimer = setTimeout(safeUpdateHUDData, 300);
     });
 
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
   // Initialize HUD & Submit Interceptor
-  chrome.storage?.local?.get(['hudVisible'], (res) => {
+  safeStorageGet(['hudVisible'], (res) => {
     if (res?.hudVisible !== false) {
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
@@ -1308,11 +1382,11 @@
       if (hud) {
         const isHidden = hud.style.display === 'none';
         hud.style.display = isHidden ? 'flex' : 'none';
-        chrome.storage?.local?.set({ hudVisible: isHidden });
+        safeStorageSet({ hudVisible: isHidden });
         if (isHidden && window.__DATA_ENTRY_PRO_UPDATE_HUD__) window.__DATA_ENTRY_PRO_UPDATE_HUD__();
       } else {
         createDynamicIslandHUD();
-        chrome.storage?.local?.set({ hudVisible: true });
+        safeStorageSet({ hudVisible: true });
       }
     }
   });
@@ -1346,7 +1420,7 @@
     }
 
     if (request.action === 'GET_DIAGNOSTIC_LOG') {
-      chrome.storage?.local?.get(['lastDiagnosticReport'], (res) => {
+      safeStorageGet(['lastDiagnosticReport'], (res) => {
         sendResponse({ status: 'COMPLETED', report: res?.lastDiagnosticReport || window.__DATA_ENTRY_PRO_LAST_RUN__ || null });
       });
       return true;
@@ -1357,11 +1431,11 @@
       if (hud) {
         const isHidden = hud.style.display === 'none';
         hud.style.display = isHidden ? 'flex' : 'none';
-        chrome.storage?.local?.set({ hudVisible: isHidden });
+        safeStorageSet({ hudVisible: isHidden });
         sendResponse({ status: 'COMPLETED', visible: isHidden });
       } else {
         createDynamicIslandHUD();
-        chrome.storage?.local?.set({ hudVisible: true });
+        safeStorageSet({ hudVisible: true });
         sendResponse({ status: 'COMPLETED', visible: true });
       }
       return true;
@@ -1406,5 +1480,5 @@
     }
   });
 
-  console.log('[Data Entry Pro v1.5.1] Active on claims portal.');
+  console.log('[Data Entry Pro v1.5.2] Active on claims portal.');
 })();
